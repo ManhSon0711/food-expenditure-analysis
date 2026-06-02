@@ -1,5 +1,3 @@
-# food-expenditure-analysis
-Statistical analysis of household food expenditure share using U.S. CES microdata (R, Quarto)
 # Household Food Expenditure Share
 
 A statistical analysis of the factors influencing household food
