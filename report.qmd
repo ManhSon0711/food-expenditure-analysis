@@ -1,0 +1,434 @@
+---
+title: "Factors Influencing Household Food Expenditure Share"
+subtitle: "A Statistical Analysis of U.S. Consumer Expenditure Survey Microdata"
+author: "Brian Nguyen"
+date: today
+format:
+  pdf: 
+    number-sections: true
+    colorlinks: true
+    fontsize: 12pt
+    geometry: margin=2.5cm
+execute: 
+  echo: false
+bibliography: 
+  - references.bib
+  - grateful-refs.bib
+---
+
+```{r}
+#| label: setup
+#| message: false
+#| warning: false
+library(tidyverse)
+library(ggplot2)
+library(janitor)
+```
+
+## Introduction
+
+Engel's Law is a well-known economic principle stating that the higher the household income, the lower the proportion of spending on food tends to be [@ritchie2023]. Besides income, other household characteristics will be considered in this project to find factors that may affect the food expenditure share.
+
+This report investigates whether such factors have a meaningful effect on food expenditure share. Using household-level data from the 2024 U.S. Consumer Expenditure Survey [@bls2024], exploratory data analysis is first conducted to identify general trends, followed by hypothesis testing to determine whether the observations are statistically significant.
+
+Understanding household food expenditure patterns is important at both the individual and policy level. At the individual level, it helps households become more aware of their own spending behaviour. At a broader level, it provides governments with an objective basis for designing appropriate economic and welfare policies.
+
+## Data Description
+
+This analysis uses public data from the 2024 Consumer Expenditure Interview Survey (CE) which is performed by the U.S. Census Bureau on behalf of the Bureau of Labor Statistics (BLS). The CE takes data about expenditures, income, and demographic information from a sample of US households. Nearly 13,000 addresses are contacted each quarter, with interviews from around 5,000 consumer units per quarter. This analysis uses the **FMLI files,** which contain household demographic and income information. Data are collected quarterly, each file representing one quarter of interviews.
+
+Four quarters of data are combined to form a dataset, providing a full year of observations.
+
+```{r}
+#| label: import-data
+#| message: false
+#| warning: false
+#Import data
+fmli_1 <- read_csv("data/raw/fmli241x.csv")
+fmli_2 <- read_csv("data/raw/fmli242.csv")
+fmli_3 <- read_csv("data/raw/fmli243.csv")
+fmli_4 <- read_csv("data/raw/fmli244.csv")
+```
+
+### Data Processing
+
+The raw FMLI files from the dataset were processed through the following steps:
+
+1.  **Column name normalization:** `clean_names()` was used to convert all column names to a consistent form.
+2.  **Column selection and type transformation:** Relevant variables were selected. All columns were converted to character before combining the tables using `bind_rows()` to ensure class consistency.
+3.  **Type conversion and validation:** After combining, columns were converted to numeric types using `parse_number()`.
+4.  **Expenditure aggregation:** After deleting invalid values, total expenditure and food expenditure were calculated. Food expenditure share was computed as the ratio of food expenditure to total expenditure.
+5.  **Finding quarterly income**: FINCBTXM is the variable representing the total income of the last 12 months, so it needs to be divided by 4 to get the average income for one quarter.
+6.  **Type conversion:** The category variables were converted back to factor type and assigned the correct values.
+7.  **Deduplication**: The most recent interview record for each ID was retained to ensure no duplicates.
+
+```{r}
+clean_fmli <- function(df){
+  df |>
+    clean_names() |>
+    select(newid, qintrvyr, qintrvmo, age_ref, sex_ref, educ_ref, fam_size,region, bls_urbn, perslt18, persot64, fincbtxm, fdhomecq, fdawaycq, totexpcq) |>
+    mutate(across(everything(), as.character)) 
+}
+```
+
+```{r}
+# Merge fmli tables
+fmli_all <- bind_rows(
+  clean_fmli(fmli_1),
+  clean_fmli(fmli_2),
+  clean_fmli(fmli_3),
+  clean_fmli(fmli_4)
+)
+# Change data type to numeric
+# Delete invalid value
+processed_data <- fmli_all |>
+  mutate(
+  across(c(qintrvyr, qintrvmo, age_ref, sex_ref,educ_ref, fam_size, region,      bls_urbn,perslt18, persot64, fincbtxm, fdhomecq, fdawaycq, totexpcq),          parse_number)) |>
+  filter(
+    qintrvmo >= 1 & qintrvmo <= 12, fincbtxm > 0, totexpcq > 0,
+    !is.na(newid),
+    !is.na(qintrvyr))
+
+# Create used variables
+processed_data <- processed_data |>
+  mutate(
+    quarter = ceiling(qintrvmo/3),
+    quarterly_income = fincbtxm/4,
+    food_exp = replace_na(fdhomecq, 0) + replace_na(fdawaycq, 0),
+    food_share = food_exp/totexpcq,
+    total_exp = totexpcq
+)
+```
+
+```{r}
+processed_data <- processed_data |>
+  mutate(sex_ref = factor(sex_ref, levels = c(1,2), labels = c("Male","Female")),
+         region = factor(region, levels = c(1,2,3,4), labels = c("Northeast", "Midwest","South", "West")),
+         bls_urbn = factor(bls_urbn, levels = c(1,2), labels = c("Urban", "Rural")),      quarter = factor(quarter),
+         educ_ref = factor(educ_ref, levels = c(0, 10, 11, 12, 13, 14, 15, 16, 17),labels = c("Never attended","1st-8th grade","9th-12th no diploma","High school","Some college", "Associate","Bachelor", "Master","Professional/Doctorate")))
+```
+
+```{r}
+# Get the IDs of the households in the highest quarter to ensure no 
+# household is analyzed twice.
+processed_data <- processed_data |>
+  filter(!is.na(region)) |>
+  group_by(newid) |>
+  slice_max(quarter, n = 1, with_ties = FALSE) |>
+  ungroup()
+```
+
+### Summary Statistics
+
+The final dataset contains 11,914 observations. The following variables show notable characteristics:
+
+```{r}
+#| include: false
+processed_data |>
+  select(quarterly_income, food_exp, total_exp,food_share, age_ref, fam_size)|> summary()
+processed_data |>
+  select(food_exp)|> summary()
+processed_data |>
+  count(sex_ref)
+processed_data |>
+  count(region)
+processed_data |>
+  count(bls_urbn)
+processed_data |>
+  count(quarter)
+```
+
+1.  **Food expenditure share** (`food_share`): Mean= 9.8%, Median= 7.2% — indicates a right-skewed distribution with a maximum of 90% suggesting that some households allocate nearly all of their spending on food. (@fig-foodshare-density)
+
+    ```{r}
+    #| label: fig-foodshare-density
+    #| fig-cap: "Distribution of Food Expenditure Share"
+    #| fig-pos: "H"
+    ggplot(processed_data, aes(x = food_share)) +
+      geom_density(fill = "orange", alpha = 0.7) +
+      geom_vline(aes(xintercept = mean(food_share)),
+                 color = "red", linetype = "dashed") +
+      geom_vline(aes(xintercept = median(food_share)),
+                 color = "yellow", linetype = "dashed") +
+      labs(x = "Food Share", y = "Density") +
+      theme_minimal()
+
+    ```
+
+2.  **Urban/ Rural**: The chart shows an imbalance in the interview locations, with approximately 94% coming from urban areas and 6% from rural areas. (@fig-rural-urban)
+
+```{r}
+#| label: fig-rural-urban
+#| fig-cap: "Difference between Urban and Rural"
+#| fig-pos: "H"
+ggplot(processed_data, aes(x = "", fill = bls_urbn)) +
+  geom_bar(position = "fill") +
+  labs(x = "Urban/Rural", y = "Proportion", fill = "Area") +
+  theme_minimal()
+```
+
+3.  **Quarterly income** (`quarterly_income`, continuous): ranges from \$0.25 to \$237,336. Mean (\$26,665) \> Median (\$18,296), also right-skewed
+4.  **Age of reference person** (`age_ref`, continuous): ranges from 16 to 88, Median = 55 — sample leans towards older people as the reference person is typically the household head.
+
+### Exploratory Data Analysis
+
+The following section uses diagrams to examine the relationship between food expenditure share and some household characteristics.
+
+```{r}
+#| label: fig-income-foodshare
+#| message: false
+#| fig-cap: "Relationship between Income and Food Share"
+#| fig-pos: "H"
+processed_data |> 
+ggplot(aes(x = quarterly_income, y = food_share)) +
+  geom_point(alpha = 0.2, size = 0.5) +
+  geom_smooth(method = "loess", color = "red") +
+  labs(x = "Quarterly Income ($)",y = "Food Expenditure Share") +
+  theme_minimal()
+
+```
+
+1.  **Income**
+
+    The scatter plot shows a remarkable pattern: low income households display a wider spread of food expenditure share values while higher income groups tend to group at lower levels. The nearly flat smooth line suggests that any effect is small in magnitude; hypothesis testing is therefore used to assess whether the difference is statistically detectable despite its modest size. (@fig-income-foodshare)
+
+2.  **Age** **of Reference Person**
+
+    The age of the reference person shows a slightly downward trend with food expenditure share. Younger reference persons tend to have higher food expenditure shares. Food share decreases with age, potentially due to lower food consumption requirements. (@fig-age-foodshare)
+
+```{r}
+#| label: fig-age-foodshare
+#| message: false
+#| fig-cap: "Relationship between Age of Reference Person and Food Share"
+#| fig-pos: "H"
+processed_data |> ggplot(aes(x = age_ref, y = food_share)) + 
+  geom_point(alpha = 0.2, size = 0.5) + 
+  geom_smooth(method = "loess", color = "red") + labs(x = "Age",y = "Food Expenditure Share") + 
+  theme_minimal()
+```
+
+3.  **Month**
+
+    A notable pattern was discovered when analyzing across months: Households interviewed in February and March had significantly higher food expenditure shares than in other months. (@fig-month-foodshare)
+
+    ```{r}
+    #| label: fig-month-foodshare
+    #| fig-cap: "Food Expenditure Share by Month"
+    #| fig-pos: "H"
+    processed_data|>
+    ggplot(aes(x = factor(qintrvmo), y = food_share, fill = factor(qintrvmo))) +
+      geom_boxplot() +
+      coord_cartesian(ylim = c(0, 0.5)) +
+      labs(x = "Month", y = "Food Share", fill = "Month") +
+      theme_minimal()
+    ```
+
+4.  **Others**
+
+```{r}
+#| include: false
+ggplot(processed_data, aes(x = factor(fam_size), y = food_share, fill = factor(fam_size))) + geom_boxplot() +
+  labs(x = "Family Size", y = "Food Expenditure Share") +
+  theme_minimal()
+```
+
+```{r}
+#| include: false
+ggplot(processed_data, aes(x = factor(persot64), y = food_share)) +
+  geom_boxplot(fill = "pink") +
+  labs(x = "Number of Elder (>64)", 
+       y = "Food Share") +
+  coord_cartesian(ylim = c(0,0.5))+
+  theme_minimal()
+```
+
+```{r}
+#| include: false
+processed_data |>
+ggplot(aes(x = region, y = food_share, fill = region)) +
+  geom_boxplot() + labs(x = "Region", y = "Food Share", fill = "Region") +
+  coord_cartesian(ylim = c(0,0.5)) +
+  theme_minimal()
+
+```
+
+```{r}
+#| include: false
+processed_data |>
+  ggplot(aes(x = sex_ref, y = food_share, fill = sex_ref)) +
+  geom_violin()+ labs(x = "Gender", y = "Food Share") +
+  theme_minimal()
+```
+
+```{r}
+#| include: false
+# Urban vs Rural
+processed_data |> filter(!is.na(bls_urbn)) |> 
+  ggplot(aes(x = bls_urbn, y = food_share, fill = bls_urbn)) +
+  geom_boxplot() +
+  labs(x = "Area", y = "Food Share", fill = "Area") +
+  theme_minimal()
+```
+
+```{r}
+#| include: false
+processed_data |>
+  ggplot(aes(x = factor(perslt18), y = food_share)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(x = "Number of Children (<18)", y = "Food Share") +
+  coord_cartesian(ylim = c(0,0.5))+
+  theme_minimal()
+```
+
+Region, sex of reference person, urban/rural classification, number of children, number of elderly members, and family size show no meaningful pattern with food expenditure share. Median values remained similar across all subgroups for these variables.
+
+## Statistical Methods
+
+Two two-sample t-tests were performed for the purpose of determining if food expenditure share differs between groups defined by income or age of reference person. For each variable, observations were divided into two groups at the median to ensure balanced sample sizes. A significance level of $\alpha = 0.05$ was used.
+
+Since the population variances are unknown and cannot be assumed equal, the test statistic is:
+
+$$T = \frac{\bar{X}_1 - \bar{X}_2}{\sqrt{\frac{s_1^2}{n_1} + \frac{s_2^2}{n_2}}} \sim t_{\text{df}}$$
+
+where:
+
+-   $\bar{X}_1$ and $\bar{X}_2$ are the sample means
+
+-   $s_1^2$ and $s_2^2$ are the sample variances
+
+-   $n_1$ and $n_2$ are the sample sizes.
+
+The degrees of freedom were calculated using the Welch–Satterthwaite approximation, as implemented in R's \`t.test()\` function.
+
+One-sided tests were used in all cases. The p-value is calculated as:
+
+$$p = P(T > t^* \mid H_0 \text{ is true})$$
+
+### Assumptions
+
+The Welch t-test requires:
+
+1.  **Independence:** Each observation represents a unique household after the deduplication step.
+2.  **Continuous variable:** Food expenditure share is a continuous ratio.
+3.  **Approximate normality:** Although food share is right-skewed, the Central Limit Theorem implies that the sampling distribution of the mean is approximately normal.
+
+### Hypotheses
+
+**Test 1: Food Expenditure Share by Income**
+
+-   $H_0$: $\mu_{\text{low}} = \mu_{\text{high}}$ (food share is similar between low and high income households)
+-   $H_a$: $\mu_{\text{low}} > \mu_{\text{high}}$ (food share of low income group is higher)
+
+```{r}
+#| include: false
+processed_data <- processed_data |>
+  mutate(income_group = ifelse(
+    quarterly_income > median(quarterly_income),"High Income", "Low Income"))
+low_income <- processed_data |> filter(income_group == "Low Income") |> pull(food_share)
+high_income <- processed_data |> filter(income_group == "High Income") |> pull(food_share)
+
+t.test(low_income, high_income, alternative = "greater")
+```
+
+**Test 2: Food Expenditure Share by Age of Reference Person**
+
+-   $H_0$: $\mu_{\text{young}} = \mu_{\text{old}}$ (food share is similar between young and old groups)
+-   $H_a$: $\mu_{\text{young}} > \mu_{\text{old}}$ (food share of young group is higher)
+
+```{r}
+#| include: false
+processed_data <- processed_data |>
+  mutate(age_group = ifelse(age_ref > median(age_ref),"Old", "Young"))
+
+young <- processed_data |> filter(age_group == "Young") |> pull(food_share)
+old <- processed_data |> filter(age_group == "Old") |> pull(food_share)
+t.test(young, old, alternative = "greater")
+```
+
+## Results
+
+**Test 1: Food Expenditure Share by Income**
+
+The t-test yielded $t = 6.77$, $p = 6.68 \times 10^{-12}$, which is far below $\alpha = 0.05$. $H_0$ is rejected. The mean food share for low-income households (10.4%) is higher than for high-income households (9.2%).
+
+**Test 2: Food Expenditure Share by Age**
+
+The t-test yielded $t = 5.08$, $p = 1.85 \times 10^{-7}$, which is less than $\alpha = 0.05$. $H_0$ is rejected. Younger reference persons had a mean food share of 10.2%, compared to 9.3% for older reference persons.
+
+Both tests provide strong evidence that income and age have an effect on food expenditure share. However, the actual differences in means are small (1.2 and 0.9 percentage points), suggesting the effects, while statistically significant, are modest in practical terms.
+
+## Modeling
+
+While the two-sample t-tests established that income and age are each individually associated with food expenditure share, they examine one variable at a time and cannot separate the contribution of each factor. To address this, a multiple linear regression was used to estimate the effect of income and age simultaneously, with each coefficient interpreted while holding the other variable constant.
+
+#### Model Specification
+
+Two specifications were considered. The first is a linear model:
+
+$$\text{food\_share} = \beta_0 + \beta_1 \cdot \text{income} + \beta_2 \cdot \text{age} + \varepsilon$$
+
+The second is a semi-log model, in which income enters in logarithmic form:
+
+$$\text{food\_share} = \beta_0 + \beta_1 \cdot \log(\text{income}) + \beta_2 \cdot \text{age} + \varepsilon$$
+
+The semi-log form was motivated by the exploratory analysis (Figure 3), which suggested a non-linear relationship: food share falls steeply across lower income levels and then flattens at higher incomes. A logarithmic transformation captures this diminishing effect more naturally than a straight line.
+
+#### Results
+
+|                    | Linear                  | Semi-log                |
+|--------------------|-------------------------|-------------------------|
+| Income coefficient | −2.81 × 10\^(-7) \*\*\* | −7.57 × 10\^(-3) \*\*\* |
+| Age coefficient    | −4.26 × 10\^(-4) \*\*\* | −4.45 × 10\^(-4) \*\*\* |
+| R²                 | 0.0108                  | 0.0121                  |
+| Adjusted R²        | 0.0106                  | 0.0119                  |
+| Residual SE        | 0.0943                  | 0.0942                  |
+
+*(\*\*\* indicates p \< 0.001)*
+
+In both specifications, the coefficients for income and age are negative and highly significant (p \< 0.001). The negative signs are consistent with Engel's Law: higher income and older reference-person age are both associated with a smaller share of spending on food. Crucially, both effects remain significant when estimated jointly, indicating that each variable contributes independently rather than one merely proxying for the other.
+
+The semi-log model fits slightly better across all measures (higher R², lower residual standard error) and is also easier to interpret for a monetary variable. Under this model, a doubling of household income is associated with a fall in food share of roughly 0.5 percentage points ($-0.007565 \times \ln 2 \approx 0.0052$), while each additional ten years of age corresponds to a decrease of about 0.4 percentage points. The semi-log specification was therefore preferred.
+
+#### Practical Significance
+
+Although both predictors are statistically significant, the model explains only about 1.2% of the variation in food expenditure share. This indicates that income and age have a genuine but small influence: the large majority of variation in food share is driven by factors not included in the model. This is consistent with the t-test findings — the effects are statistically detectable yet modest in practical terms — and reflects the inherent noisiness of household-level spending behaviour.
+
+#### Model Assumptions
+
+The standard OLS diagnostic plots were examined to assess the model's validity.
+
+The **Residuals vs Fitted** plot showed residuals concentrated below zero with a long upward tail, indicating asymmetry rather than the random scatter expected under a well-specified linear model. The **Scale-Location** plot confirmed **heteroscedasticity**: the spread of the standardised residuals increases with the fitted values, violating the constant-variance assumption. The **Normal Q-Q** plot departed substantially from the diagonal at the upper tail, showing that the residuals are right-skewed and not normally distributed. These three patterns are all consequences of the response variable—food expenditure share—being a right-skewed proportion bounded at zero.
+
+The **Residuals vs Leverage** plot was more reassuring: all observations had very low leverage and none exceeded Cook's distance, so no single household unduly influences the estimates.
+
+Taken together, the diagnostics suggest the coefficient estimates remain unbiased and, given the very large sample size (n = 11,914), the Central Limit Theorem suggests the significance tests are still broadly reliable. However, the violations of homoscedasticity and normality mean the standard errors should be interpreted with some caution. Two natural refinements for future work would be heteroscedasticity-robust standard errors, or modelling the bounded proportion directly with a method such as beta or fractional-logit regression rather than ordinary least squares.
+
+## Discussion
+
+Both hypothesis tests produced p-values well below $\alpha = 0.05$, supporting rejection of $H_0$ in both cases. This provides evidence that both higher income and older age are associated with lower food expenditure share. As household income increases, a smaller proportion is allocated to food, consistent with Engel's Law. Similarly, households with older reference persons may allocate a larger share of spending to non-food expenses such as healthcare or education, which could reduce the relative share spent on food.
+
+The regression analysis reinforced these findings. When income and age were modelled jointly, both remained significant predictors with the expected negative signs, confirming that each exerts an independent effect rather than one merely proxying for the other. At the same time, the very low $R^2$ showed that together they explain only a small fraction of the variation in food share. This underscores a consistent theme across both methods: while the Engel's Law relationship is real and statistically detectable, it is modest in magnitude relative to the many other factors shaping household spending.
+
+A notable pattern was also observed in the exploratory analysis: households interviewed in February and March exhibited higher food expenditure shares than those interviewed in other months. However, the interview month reflects the timing of data collection rather than the timing of actual purchases, so this pattern may not represent genuine seasonal variation in consumer behaviour.
+
+Other factors examined through exploratory analysis — region, sex, urban/rural classification, family size, number of elderly members, and number of children — did not reveal meaningful differences in food expenditure share.
+
+## Limitations
+
+Several limitations should be noted when interpreting these results.
+
+First, although the effects of income and age are statistically significant, their magnitude is small. The mean differences identified by the t-tests were only 1.2 and 0.9 percentage points, and the regression explained only about 1.2% of the variation in food share. The effects are therefore modest in practical terms, and their statistical significance is partly a consequence of the large sample size.
+
+Second, food expenditure share varied notably by interview month, and neither the t-tests nor the regression controlled for this. Any imbalance in the distribution of interview months across income or age groups could partially confound the observed relationships.
+
+Third, the diagnostic plots revealed that the regression violates two key OLS assumptions: the residuals are heteroscedastic and not normally distributed. These violations arise because food expenditure share is a right-skewed proportion bounded at zero. While the coefficient estimates remain unbiased and the large sample size keeps the significance tests broadly reliable, the standard errors should be interpreted with some caution.
+
+Finally, the analysis considered only two explanatory variables. The low explanatory power suggests that many relevant factors were not captured, leaving room for a richer model.
+
+## Conclusion
+
+This analysis confirms that both income and age of the household reference person have a statistically significant association with food expenditure share, consistent with Engel's Law. Both the hypothesis tests and the regression model pointed to the same conclusion: the relationships are real and in the expected direction, but small in practical terms. The low explanatory power of the model indicates that food expenditure share is shaped by many factors beyond those examined here.
+
+Future work could extend the analysis in two directions: incorporating additional household and economic characteristics to improve explanatory power, and adopting a modelling approach better suited to bounded proportions — such as heteroscedasticity-robust standard errors, or beta or fractional-logit regression — to address the assumption violations identified here.
+
+## References
