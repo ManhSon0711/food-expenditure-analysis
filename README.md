@@ -10,7 +10,7 @@ Built with **R**, **Quarto**, and the **tidyverse**.
 
 ## What's inside
 
-- `report.qmd` — the full analysis (data processing, EDA, hypothesis testing)
+- `report.qmd` — the full analysis (data processing, EDA, hypothesis testing, regression modeling)
 - `report.pdf` — rendered report
 
 ## Summary
